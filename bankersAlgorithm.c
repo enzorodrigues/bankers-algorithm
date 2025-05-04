@@ -15,7 +15,8 @@ int remainingCustomerNeed[NUMBER_OF_CUSTOMERS][NUMBER_OF_RESOURCES];
 
 pthread_mutex_t mutex;
 
-void printSystemState() {
+// ====== UTILS ======
+void print_system_state() {
     printf("\n----- System Current State ----\n");
     printf("Available Resources: ");
     for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
@@ -38,75 +39,107 @@ void printSystemState() {
     printf("--------------------------------\n");
 }
 
-bool systemInSafeState() {
-    int work[NUMBER_OF_RESOURCES];
-    int finish[NUMBER_OF_CUSTOMERS] = { false };
+void print_request_result(bool success, int customerId, int customerDemand[NUMBER_OF_RESOURCES]) {
+    printf("Client %d: ", customerId);
+    printf("Request %s - ", success ? "allowed" : "denied");
+    printf("(%d,%d,%d)\n", customerDemand[0], customerDemand[1], customerDemand[2]);
+}
 
-    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-        work[i] = availableResources[i];
+void print_release_result(int customerId, int customeRelease[NUMBER_OF_RESOURCES]) {
+    printf("Client %d: resources released - ", customerId);
+    printf("(%d,%d,%d)\n", customeRelease[0], customeRelease[1], customeRelease[2]);
+}
+
+// ====== SECURITY ALGORITHM ======
+
+bool can_fulfill_need(int customer, int work[]) {
+    for (int j = 0; j < NUMBER_OF_RESOURCES; j++) {
+        if (remainingCustomerNeed[customer][j] > work[j])
+            return false;
     }
+    return true;
+}
 
-    int canAllocate;
+void release_allocation(int customer, int work[]) {
+    for (int j = 0; j < NUMBER_OF_RESOURCES; j++) {
+        work[j] += currentAllocationOfCustomer[customer][j];
+    }
+}
+
+bool system_in_safe_state() {
+    int work[NUMBER_OF_RESOURCES];
+    bool finish[NUMBER_OF_CUSTOMERS] = { false };
+
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++)
+        work[i] = availableResources[i];
+
+    bool canAllocate;
     while (true) {
         canAllocate = false;
         for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
-            if (!finish[i]) {
-                int canFulfill = true;
-                for (int j = 0; j < NUMBER_OF_RESOURCES; j++) {
-                    if (remainingCustomerNeed[i][j] > work[j]) {
-                        canFulfill = false;
-                        break;
-                    }
-                }
-                if (canFulfill) {
-                    for (int j = 0; j < NUMBER_OF_RESOURCES; j++){
-                        work[j] += currentAllocationOfCustomer[i][j];
-                    }
-                    finish[i] = true;
-                    canAllocate = true;
-                }
+            if (!finish[i] && can_fulfill_need(i, work)) {
+                release_allocation(i, work);
+                finish[i] = true;
+                canAllocate = true;
             }
         }
         if (!canAllocate) break;
     }
 
-    for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
+    for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++)
         if (!finish[i]) return false;
-    }  
 
     return true;
+}
+
+// ====== REQUEST RESOURCE ======
+
+bool is_request_valid(int customer, int request[]) {
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
+        if (request[i] > remainingCustomerNeed[customer][i] || request[i] > availableResources[i])
+            return false;
+    }
+    return true;
+}
+
+void allocate_resources(int customer, int request[]) {
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
+        availableResources[i] -= request[i];
+        currentAllocationOfCustomer[customer][i] += request[i];
+        remainingCustomerNeed[customer][i] -= request[i];
+    }
+}
+
+void rollback_allocation(int customer, int request[]) {
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
+        availableResources[i] += request[i];
+        currentAllocationOfCustomer[customer][i] -= request[i];
+        remainingCustomerNeed[customer][i] += request[i];
+    }
 }
 
 int request_resources(int customer_num, int request[]) {
     pthread_mutex_lock(&mutex);
 
-    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-        if (request[i] > remainingCustomerNeed[customer_num][i] || request[i] > availableResources[i]) {
-            pthread_mutex_unlock(&mutex);
-            return -1;
-        }
-    }
-
-    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-        availableResources[i] -= request[i];
-        currentAllocationOfCustomer[customer_num][i] += request[i];
-        remainingCustomerNeed[customer_num][i] -= request[i];
-    }
-
-    if (!systemInSafeState()) {
-        for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-            availableResources[i] += request[i];
-            currentAllocationOfCustomer[customer_num][i] -= request[i];
-            remainingCustomerNeed[customer_num][i] += request[i];
-        }
+    if (!is_request_valid(customer_num, request)) {
         pthread_mutex_unlock(&mutex);
         return -1;
     }
 
-    printSystemState();
+    allocate_resources(customer_num, request);
+
+    if (!system_in_safe_state()) {
+        rollback_allocation(customer_num, request);
+        pthread_mutex_unlock(&mutex);
+        return -1;
+    }
+
+    print_system_state();
     pthread_mutex_unlock(&mutex);
     return 0;
 }
+
+// ====== RELEASE RESOURCE ======
 
 int release_resources(int customer_num, int release[NUMBER_OF_RESOURCES]) {
     pthread_mutex_lock(&mutex);
@@ -119,20 +152,23 @@ int release_resources(int customer_num, int release[NUMBER_OF_RESOURCES]) {
         currentAllocationOfCustomer[customer_num][i] -= release[i];
         remainingCustomerNeed[customer_num][i] += release[i];
     }
-    printSystemState();
+    print_system_state();
     pthread_mutex_unlock(&mutex);
     return 0;
 }
 
-void printRequestResult(bool success, int customerId, int customerDemand[NUMBER_OF_RESOURCES]) {
-    printf("Cliente %d: ", customerId);
-    printf("solicitação %s - ", success ? "atendida" : "negada");
-    printf("(%d,%d,%d)\n", customerDemand[0], customerDemand[0], customerDemand[0]);
+// ====== CUSTOMER THREAD ======
+
+void generate_random_request(int customer, int request[]) {
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
+        request[i] = rand() % (remainingCustomerNeed[customer][i] + 1);
+    }
 }
 
-void printReleaseResult(int customerId, int customeRelease[NUMBER_OF_RESOURCES]) {
-    printf("Cliente %d: recursos liberados - ", customerId);
-    printf("(%d,%d,%d)\n", customeRelease[0], customeRelease[0], customeRelease[0]);
+void generate_random_release(int customer, int release[]) {
+    for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
+        release[i] = rand() % (currentAllocationOfCustomer[customer][i] + 1);
+    }
 }
 
 void* customerDemandFunction(void* arg) {
@@ -142,39 +178,34 @@ void* customerDemandFunction(void* arg) {
 
     while(true) {
         pthread_mutex_lock(&mutex);
-
-        for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-            request[i] = rand() % (remainingCustomerNeed[customer_num][i] + 1);
-        }
-            
+        generate_random_request(customer_num, request);
         pthread_mutex_unlock(&mutex);
 
         bool requestSuccess = request_resources(customer_num, request) == 0;
-        printRequestResult(requestSuccess, customer_num, request);
+        print_request_result(requestSuccess, customer_num, request);
 
         sleep(rand() % MAX_TIME);
 
         pthread_mutex_lock(&mutex);
-
-        for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
-            release[i] = rand() % (currentAllocationOfCustomer[customer_num][i] + 1);
-        }
-    
+        generate_random_release(customer_num, release);
         pthread_mutex_unlock(&mutex);
 
         release_resources(customer_num, release);
+        print_release_result(customer_num, release);
     }
 
     return NULL;
 }
 
-void initAvailableResources(char* argv[]) {
+// ====== Initialize Properties ======
+
+void init_available_resources(char* argv[]) {
     for (int i = 0; i < NUMBER_OF_RESOURCES; i++){
         availableResources[i] = atoi(argv[i+1]);
     }
 }
 
-void defineDemandOfCustomers() {
+void define_demand_of_customers() {
     for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
         for (int ii = 0; ii < NUMBER_OF_RESOURCES; ii++) {
             maximumDemandOfCustomer[i][ii] = rand() % (availableResources[ii]);
@@ -184,13 +215,15 @@ void defineDemandOfCustomers() {
     }
 }
 
-void setupThreads(pthread_t threads[NUMBER_OF_CUSTOMERS]) {
+void init_threads(pthread_t threads[NUMBER_OF_CUSTOMERS]) {
     int customer_ids[NUMBER_OF_CUSTOMERS];
     for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
         customer_ids[i] = i;
         pthread_create(&threads[i], NULL, customerDemandFunction, &customer_ids[i]);
     }
 }
+
+// ====== MAIN FUNCTION ======
 
 int main(int argc, char* argv[]) {
 
@@ -200,14 +233,14 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    initAvailableResources(argv);
+    init_available_resources(argv);
 
     pthread_mutex_init(&mutex, NULL);
 
-    defineDemandOfCustomers();
+    define_demand_of_customers();
 
     pthread_t threads[NUMBER_OF_CUSTOMERS];
-    setupThreads(threads);
+    init_threads(threads);
 
     for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
         pthread_join(threads[i], NULL);
