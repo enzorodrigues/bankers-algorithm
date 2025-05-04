@@ -206,13 +206,18 @@ void init_available_resources(char* argv[]) {
 }
 
 void define_demand_of_customers() {
+    printf("\n--- Customers maximum demands ---\n");
     for (int i = 0; i < NUMBER_OF_CUSTOMERS; i++) {
+        printf("Customer %d:", i);
         for (int ii = 0; ii < NUMBER_OF_RESOURCES; ii++) {
             maximumDemandOfCustomer[i][ii] = rand() % (availableResources[ii]);
             currentAllocationOfCustomer[i][ii] = 0;
             remainingCustomerNeed[i][ii] = maximumDemandOfCustomer[i][ii];
+            printf(" %d", maximumDemandOfCustomer[i][ii]);
         }
+        printf("\n");
     }
+    printf("\n");
 }
 
 void init_threads(pthread_t threads[NUMBER_OF_CUSTOMERS]) {
